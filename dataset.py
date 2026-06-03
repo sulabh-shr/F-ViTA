@@ -1,8 +1,4 @@
 import os
-os.environ['HF_DATASETS_CACHE']="/mnt/store/jparanj1/.cache/"
-os.environ['TRANSFORMERS_CACHE']='/mnt/store/jparanj1/.cache/'
-os.environ['HF_HOME']="/mnt/store/jparanj1/.cache/"
-os.environ['HF_HUB_CACHE']='/mnt/store/jparanj1/.cache/'
 import numpy as np
 import PIL
 from PIL import Image
@@ -33,6 +29,7 @@ from GroundingDINO.groundingdino.util.utils import clean_state_dict, get_phrases
 # segment anything
 from segment_anything import (
     build_sam,
+    build_sam_vit_b,
     build_sam_hq,
     SamPredictor
 ) 
@@ -181,7 +178,7 @@ class ThermalDataset(Dataset):
         self.return_text = True if return_text.lower()=='true' else False
         self.return_boxes = True if return_boxes.lower()=='true' else False
         self.return_masks = True if return_masks.lower()=='true' else False
-        self.predictor = SamPredictor(build_sam(checkpoint=sam_checkpoint).to(device))
+        self.predictor = SamPredictor(build_sam_vit_b(checkpoint=sam_checkpoint).to(device))
 
     
         self.tokenizer = CLIPTokenizer.from_pretrained(
