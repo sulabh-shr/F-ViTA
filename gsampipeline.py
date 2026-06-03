@@ -1,74 +1,46 @@
-import argparse
-import logging
-import math
 import os
-
-import PIL.Image
-os.environ['HF_DATASETS_CACHE']="/mnt/store/jparanj1/.cache/"
-os.environ['TRANSFORMERS_CACHE']='/mnt/store/jparanj1/.cache/'
-os.environ['HF_HOME']="/mnt/store/jparanj1/.cache/"
-os.environ['HF_HUB_CACHE']='/mnt/store/jparanj1/.cache/'
-from pathlib import Path
+import sys
 from typing import Optional
 
-import sys
-sys.path.append('/mnt/store/jparanj1/Grounded-Segment-Anything')
-sys.path.append("/mnt/store/jparanj1/Grounded-Segment-Anything/GroundingDINO")
-sys.path.append("/mnt/store/jparanj1/Grounded-Segment-Anything/recognize-anything")
-from transformers import CLIPTextModel, CLIPTokenizer
-from positional_encodings.torch_encodings import PositionalEncodingPermute2D, Summer
+sys.path.append('Grounded-Segment-Anything')
+sys.path.append("Grounded-Segment-Anything/GroundingDINO")
+sys.path.append("Grounded-Segment-Anything/recognize-anything")
+sys.path.append("Grounded-Segment-Anything/segment_anything")
 
-#gsam requirements
-# Grounding DINO
-from GroundingDINO.groundingdino.datasets import transforms as T
-from GroundingDINO.groundingdino.models import build_model
-from GroundingDINO.groundingdino.util.slconfig import SLConfig
-from GroundingDINO.groundingdino.util.utils import clean_state_dict, get_phrases_from_posmap
-
-# segment anything
-from segment_anything import (
-    build_sam,
-    build_sam_hq,
-    SamPredictor
-) 
-# Recognize Anything Model & Tag2Text
-from ram.models import ram
-from ram import inference_ram
-import torchvision.transforms as TS
-
-import accelerate
 import cv2
-import datasets
-import diffusers
-import torchvision
 import numpy as np
-import PIL
-import requests
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
-import transformers
-from accelerate import Accelerator
-from accelerate.logging import get_logger
-from accelerate.utils import ProjectConfiguration, set_seed
-from datasets import load_dataset
-from diffusers import (AutoencoderKL, DDPMScheduler,
-                       StableDiffusionInstructPix2PixPipeline,
-                       UNet2DConditionModel)
-from diffusers.optimization import get_scheduler
-from diffusers.training_utils import EMAModel
-from diffusers.utils import check_min_version, deprecate, is_wandb_available
-from diffusers.utils.import_utils import is_xformers_available
-from huggingface_hub import HfFolder, Repository, create_repo, whoami
-from packaging import version
-from torchvision import transforms
-from tqdm.auto import tqdm
-from transformers import CLIPTextModel, CLIPTokenizer
-from diffusers import StableDiffusionInstructPix2PixPipeline
-from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import StableDiffusionPipelineOutput
-from diffusers.utils import make_image_grid, load_image
+import torchvision
+import torchvision.transforms as TS
+from diffusers import (
+    StableDiffusionInstructPix2PixPipeline,
+)
+from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import (
+    StableDiffusionPipelineOutput,
+)
+from diffusers.utils import (
+    deprecate,
+    load_image,
+)
+from GroundingDINO.groundingdino.datasets import transforms as T
+from GroundingDINO.groundingdino.models import build_model
+from GroundingDINO.groundingdino.util.slconfig import SLConfig
+from GroundingDINO.groundingdino.util.utils import (
+    clean_state_dict,
+    get_phrases_from_posmap,
+)
 from matplotlib import pyplot as plt
+from positional_encodings.torch_encodings import PositionalEncodingPermute2D
+from ram import inference_ram
+from ram.models import ram
+from segment_anything import SamPredictor, build_sam, build_sam_hq, build_sam_vit_b
+from transformers import CLIPTextModel, CLIPTokenizer
+
 from utils import *
+
+WEIGHTS_DIR = os.environ.get('MODEL_WEIGHTS', "pretrained_weights")
 
 def tokenize_captions(tokenizer, captions):
         inputs = tokenizer(
@@ -270,12 +242,13 @@ def get_gsam_outputs(visible_img_path, model, ram_model, sam_predictor,
     # return natural_im, thermal_im, text_ins, text_embeddings, box_embeddings, mask_embeddings
     return text_embeddings, box_embeddings, mask_embeddings
 
+
 class StableDiffusionInstructPix2PixGSAMPipeline():
     def __init__(self, unet, added_linear,
-                 config_file='/mnt/store/jparanj1/Grounded-Segment-Anything/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py', 
-                 grounded_checkpoint='/mnt/store/jparanj1/Grounded-Segment-Anything/groundingdino_swint_ogc.pth', 
-                 ram_checkpoint='/mnt/store/jparanj1/Grounded-Segment-Anything/ram_swin_large_14m.pth',
-                 sam_checkpoint='/mnt/store/jparanj1/sam_vit_b_01ec64.pth',
+                 config_file="Grounded-Segment-Anything/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py",
+                 grounded_checkpoint=os.path.join(WEIGHTS_DIR, 'groundingdino_swint_ogc.pth'),
+                 ram_checkpoint=os.path.join(WEIGHTS_DIR, 'ram_swin_large_14m.pth'),
+                 sam_checkpoint=os.path.join(WEIGHTS_DIR, 'sam_vit_b_01ec64.pth'),
                  return_boxes=False,
                  return_masks=True,
                  return_text=True,
@@ -286,9 +259,8 @@ class StableDiffusionInstructPix2PixGSAMPipeline():
         self.added_linear = added_linear.to(device)
         self.config = config_file
         self.pipeline = StableDiffusionInstructPix2PixPipeline.from_pretrained(
-            'timbrooks/instruct-pix2pix',torch_dtype=torch.float16, use_auth_token=True,
-            unet = unet,
-            cache_dir='/mnt/store/jparanj1/.cache'
+            'timbrooks/instruct-pix2pix', torch_dtype=torch.float16,
+            unet=unet,
         ).to("cuda")
 
         self.model = load_model(config_file, grounded_checkpoint, device=device)
@@ -307,7 +279,7 @@ class StableDiffusionInstructPix2PixGSAMPipeline():
         self.return_text = return_text
         self.return_boxes = return_boxes
         self.return_masks = return_masks
-        self.predictor = SamPredictor(build_sam(checkpoint=sam_checkpoint).to(device))
+        self.predictor = SamPredictor(build_sam_vit_b(checkpoint=sam_checkpoint).to(device))
 
     
         self.tokenizer = CLIPTokenizer.from_pretrained(
