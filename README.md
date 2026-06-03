@@ -51,6 +51,14 @@ clone the Grounded SAM folder from IDEA-Research
 ```
 git clone https://github.com/IDEA-Research/Grounded-Segment-Anything.git
 ```
+Follow the installation instructions of Grounded-Segment-Anything:
+```
+cd Grounded-Segment-Anything
+export AM_I_DOCKER=False
+export BUILD_WITH_CUDA=True
+export CUDA_HOME=/path/to/cuda/
+python -m pip install --no-build-isolation -e GroundingDINO
+```
 Install Recognize Anything Model from their official repository
 ```
 pip install git+https://github.com/xinyu1205/recognize-anything.git
@@ -61,7 +69,7 @@ Download these checkpoints and paste them in the Grounded-Segment-Anything folde
 
 2) [Grounded DINO](https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth)
 
-3) [SAM](https://huggingface.co/datasets/Gourieff/ReActor/blob/main/models/sams/sam_vit_b_01ec64.pth)
+3) [SAM](https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth)
 
 Feel free to use other versions of these foundation models.
 
