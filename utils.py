@@ -1,18 +1,40 @@
 import os
-import sys
-os.environ['HF_DATASETS_CACHE']="/mnt/store/jparanj1/.cache/"
-os.environ['TRANSFORMERS_CACHE']='/mnt/store/jparanj1/.cache/'
-os.environ['HF_HOME']="/mnt/store/jparanj1/.cache/"
-os.environ['HF_HUB_CACHE']='/mnt/store/jparanj1/.cache/'
-
 import shutil
+from glob import glob
+from pathlib import Path
+
+import lpips
+import torch
+from cleanfid import fid
+from PIL import Image
+from torch.utils.data import DataLoader, Dataset
+from torchvision import transforms as T
+from tqdm import tqdm
+
+IMG_FORMATS = (
+    "bmp",
+    "dng",
+    "jpeg",
+    "jpg",
+    "mpo",
+    "png",
+    "tif",
+    "tiff",
+    "webp",
+    "pfm",
+)  # include image suffixes
+
 
 def get_val_images(dataset_name):
     images = []
     gts = []
     names = []
+    dataset_root = os.getenv("DATASETS", "datasets")
+    if not os.path.exists(dataset_root):
+        raise FileNotFoundError(f"Dataset root directory not found: {dataset_root}")
+    
     if dataset_name=='osu':
-        root = '/mnt/store/jparanj1/Thermal_Datasets/OSU CT'      
+        root = os.path.join(dataset_root, 'OSU CT')      
         file_list = [f"img_{i:05}.bmp" for i in range(100000)]
 
         # Separate into odd and even lists
@@ -35,7 +57,7 @@ def get_val_images(dataset_name):
 
     elif 'm3fd' in dataset_name:
         split = int(dataset_name[-1])
-        root = f'/mnt/store/jparanj1/Thermal_Datasets/M3FD_Fusion/splits/split_{split}/val'
+        root = os.path.join(dataset_root, 'M3FD_Fusion', 'splits', f'split_{split}', 'val')
         file_list = os.listdir(os.path.join(root,'Vis'))
         for i in range(len(file_list)):
             images.append(os.path.join(root, 'Vis', file_list[i]))
@@ -43,7 +65,7 @@ def get_val_images(dataset_name):
             names.append(file_list[i])
 
     elif 'flir' in dataset_name:
-        root = f'/mnt/store/jparanj1/Thermal_Datasets/FLIR_Align/test'
+        root = os.path.join(dataset_root, 'FLIR_Align', 'test')
         file_list = os.listdir(os.path.join(root,'Vis'))
         for i in range(len(file_list)):
             images.append(os.path.join(root, 'Vis', file_list[i]))
@@ -51,7 +73,7 @@ def get_val_images(dataset_name):
             names.append(file_list[i])
 
     elif 'kaist' in dataset_name:
-        root = f'/mnt/store/jparanj1/Thermal_Datasets/KAIST/test'
+        root = os.path.join(dataset_root, 'KAIST', 'test')
         file_list = os.listdir(os.path.join(root,'Vis'))
         for i in range(len(file_list)):
             images.append(os.path.join(root, 'Vis', file_list[i]))
@@ -59,22 +81,15 @@ def get_val_images(dataset_name):
             names.append(file_list[i])
 
     elif 'llvip' in dataset_name:
-        root = f'/mnt/store/jparanj1/Thermal_Datasets/LLVIP/test'
+        root = os.path.join(dataset_root, 'LLVIP', 'test')
         file_list = os.listdir(os.path.join(root,'Vis'))
         for i in range(len(file_list)):
             images.append(os.path.join(root, 'Vis', file_list[i]))
             gts.append(os.path.join(root, 'Ir', file_list[i]))
             names.append(file_list[i])
     
-    # elif 'litiv' in dataset_name:
-    #     root = f'/mnt/store/jparanj1/Thermal_Datasets/litiv2012_dataset_2/test'
-    #     file_list = os.listdir(os.path.join(root,'Vis'))
-    #     for i in range(len(file_list)):
-    #         images.append(os.path.join(root, 'Vis', file_list[i]))
-    #         gts.append(os.path.join(root, 'Ir', file_list[i]))
-    #         names.append(file_list[i])
     elif 'litiv' in dataset_name:
-        root = f'/mnt/store/jparanj1/Thermal_Datasets/litiv2012_dataset/SEQUENCE7'
+        root = os.path.join(dataset_root, 'litiv2012_dataset', 'SEQUENCE7')
         file_list = os.listdir(os.path.join(root,'VISIBLE/input'))
         for i in range(len(file_list)):
             images.append(os.path.join(root, 'VISIBLE/input', file_list[i]))
@@ -82,7 +97,7 @@ def get_val_images(dataset_name):
             names.append(file_list[i])
 
     elif 'mfnet' in dataset_name:
-        root = f'/mnt/store/jparanj1/Thermal_Datasets/MFNet'
+        root = os.path.join(dataset_root, 'MFNet')
         file_list = os.listdir(os.path.join(root,'RGB'))
         for i in range(len(file_list)):
             images.append(os.path.join(root, 'RGB', file_list[i]))
@@ -90,7 +105,7 @@ def get_val_images(dataset_name):
             names.append(file_list[i])
         
     elif 'nirscene' in dataset_name:
-        root = f'/mnt/store/jparanj1/Thermal_Datasets/NIRSCENE/test'
+        root = os.path.join(dataset_root, 'NIRSCENE', 'test')
         file_list = os.listdir(os.path.join(root,'Vis'))
         for i in range(len(file_list)):
             images.append(os.path.join(root, 'Vis', file_list[i]))
@@ -98,42 +113,15 @@ def get_val_images(dataset_name):
             names.append(file_list[i])
     else:
         print("Assuming data directory path in dataset_name")
-        file_list = os.listdir(dataset_name)
+        file_list = os.listdir(os.path.join(dataset_root, dataset_name))
         for i in range(len(file_list)):
-            images.append(os.path.join(dataset_name, file_list[i]))
-            gts.append(os.path.join(dataset_name, file_list[i]))
+            images.append(os.path.join(dataset_root, dataset_name, file_list[i]))
+            gts.append(os.path.join(dataset_root, dataset_name, file_list[i]))
             names.append(file_list[i])
 
     print("len images: ", len(images))
     print("len gts: ", len(gts))
     return images, gts, names
-
-from cleanfid import fid
-from pathlib import Path
-from cleanfid import fid
-import torch
-from torch.utils.data import Dataset
-from torchvision import transforms as T
-import lpips
-from glob import glob
-import os
-from PIL import Image
-from torch.utils.data import DataLoader
-from tqdm import tqdm
-
-IMG_FORMATS = (
-    "bmp",
-    "dng",
-    "jpeg",
-    "jpg",
-    "mpo",
-    "png",
-    "tif",
-    "tiff",
-    "webp",
-    "pfm",
-)  # include image suffixes
-
 
 class PairDataset(Dataset):
     def __init__(self, dataset1, dataset2) -> None:
