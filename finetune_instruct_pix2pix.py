@@ -20,40 +20,31 @@ import argparse
 import logging
 import math
 import os
-os.environ['HF_DATASETS_CACHE']="/mnt/store/jparanj1/.cache/"
-os.environ['TRANSFORMERS_CACHE']='/mnt/store/jparanj1/.cache/'
-os.environ['HF_HOME']="/mnt/store/jparanj1/.cache/"
-os.environ['HF_HUB_CACHE']='/mnt/store/jparanj1/.cache/'
-
 import sys
-sys.path.append('Grounded-Segment-Anything')
-sys.path.append("Grounded-Segment-Anything/GroundingDINO")
-sys.path.append("Grounded-Segment-Anything/recognize-anything")
-
-import PIL.Image
+from itertools import chain
 from pathlib import Path
 from typing import Optional
 
 import accelerate
-import datasets
 import diffusers
 import numpy as np
 import PIL
+import PIL.Image
 import requests
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint
-from itertools import chain
 import transformers
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
-from datasets import load_dataset
-from dataset import ThermalDataset, TransformDataset
-from diffusers import (AutoencoderKL, DDPMScheduler,
-                       StableDiffusionInstructPix2PixPipeline,
-                       UNet2DConditionModel)
+from diffusers import (
+    AutoencoderKL,
+    DDPMScheduler,
+    StableDiffusionInstructPix2PixPipeline,
+    UNet2DConditionModel,
+)
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel
@@ -61,11 +52,20 @@ from diffusers.utils import check_min_version, deprecate, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
 from huggingface_hub import HfFolder, Repository, create_repo, whoami
 from packaging import version
+from torch.utils.data import ConcatDataset
 from torchvision import transforms
 from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
 
-from torch.utils.data import ConcatDataset
+import datasets
+from dataset import ThermalDataset, TransformDataset
+from datasets import load_dataset
+
+sys.path.append('Grounded-Segment-Anything')
+sys.path.append("Grounded-Segment-Anything/GroundingDINO")
+sys.path.append("Grounded-Segment-Anything/recognize-anything")
+sys.path.append("Grounded-Segment-Anything/segment_anything")
+
 
 class CustomConcatDataset(ConcatDataset):
     def __init__(self, datasets):
@@ -501,6 +501,7 @@ def download_image(url):
 
 import torch
 
+
 def rgb_to_hsv(rgb: torch.Tensor) -> torch.Tensor:
     """
     Converts an RGB image to HSV format.
@@ -597,7 +598,93 @@ def compute_IBL(orig_img, pred_img, masks):
         print("yhat is: ", y_hat)
     print("IBL: ",loss)
     return loss
-    
+
+def get_dataset(args):
+    data_root = os.getenv("DATASETS", "datasets")
+    # load all thermal datasets
+    if args.dataset_name == 'all-local':
+        trsets = []
+        valsets = []
+        # osu - MWIR
+        valsets.append(ThermalDataset(data_root=os.path.join(data_root, 'OSU CT', 'val'), return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks))
+        trsets.append(ThermalDataset(data_root=os.path.join(data_root, 'OSU CT', 'train'), return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks))
+        # flir = LWIR    
+        trsets.append(ThermalDataset(data_root=os.path.join(data_root, 'FLIR_Align', 'train'), return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks))
+        valsets.append(ThermalDataset(data_root=os.path.join(data_root, 'FLIR_Align', 'val'), return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks))
+        # kaist - LWIR
+        trsets.append(ThermalDataset(data_root=os.path.join(data_root, 'KAIST', 'train'), return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks))
+        valsets.append(ThermalDataset(data_root=os.path.join(data_root, 'KAIST', 'test'), return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks))
+        # litiv - MWIR
+        trsets.append(ThermalDataset(data_root=os.path.join(data_root, 'litiv2012_dataset', 'train'), return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks))
+        valsets.append(ThermalDataset(data_root=os.path.join(data_root, 'litiv2012_dataset', 'test'), return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks))
+        # nirscene - NIR
+        trsets.append(ThermalDataset(data_root=os.path.join(data_root, 'NIRSCENE', 'train'), return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks))
+        valsets.append(ThermalDataset(data_root=os.path.join(data_root, 'NIRSCENE', 'test'), return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks))
+
+
+        tr_dataset = CustomConcatDataset(trsets)
+        val_dataset = CustomConcatDataset(valsets)
+        dataset = datasets.DatasetDict({
+                'train': tr_dataset,
+                'val': val_dataset,
+            })
+    # load single non-custom dataset 
+    elif args.dataset_name is not None:
+        # Downloading and loading a dataset from the hub.
+        tr_dataset = None
+        val_dataset = None
+        if args.dataset_name=='osu-local':
+            tr_dataset = ThermalDataset(data_root=os.path.join(data_root, 'OSU CT', 'train'), return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks)
+            val_dataset = ThermalDataset(data_root=os.path.join(data_root, 'OSU CT', 'val'), return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks)
+        elif args.dataset_name=='m3fd-local':
+            tr_dataset = ThermalDataset(data_root = os.path.join(data_root, 'M3FD_Fusion', 'splits', f'split_{args.split}', 'train'), return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks)
+            val_dataset = ThermalDataset(data_root = os.path.join(data_root, 'M3FD_Fusion', 'splits', f'split_{args.split}', 'val'), return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks)
+        elif args.dataset_name=='flir_v1-local':
+            tr_dataset = ThermalDataset(data_root = os.path.join(data_root, 'FLIR_Align', 'train'), return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks)
+            val_dataset = ThermalDataset(data_root = os.path.join(data_root, 'FLIR_Align', 'val'), return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks)
+            
+        elif args.dataset_name=='kaist-local':
+            tr_dataset = ThermalDataset(data_root = os.path.join(data_root, 'KAIST', 'train'), return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks)
+            val_dataset = ThermalDataset(data_root = os.path.join(data_root, 'KAIST', 'test'), return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks)
+            
+        elif args.dataset_name=='llvip-local':
+            tr_dataset = ThermalDataset(data_root = os.path.join(data_root, 'LLVIP', 'train'), return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks)
+            val_dataset = ThermalDataset(data_root = os.path.join(data_root, 'LLVIP', 'test'), return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks)
+            
+        elif args.dataset_name=='litiv-local':
+            tr_dataset = ThermalDataset(data_root=os.path.join(data_root, 'litiv2012_dataset', 'train'), return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks)
+            val_dataset = ThermalDataset(data_root=os.path.join(data_root, 'litiv2012_dataset', 'test'), return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks)
+            
+        elif args.dataset_name=='nirscene-local':
+            tr_dataset = ThermalDataset(data_root=os.path.join(data_root, 'NIRSCENE', 'train'), return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks)
+            val_dataset = ThermalDataset(data_root=os.path.join(data_root, 'NIRSCENE', 'test'), return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks)
+            
+        if tr_dataset is not None and val_dataset is not None:
+            dataset = datasets.DatasetDict({
+                'train': tr_dataset,
+                'val': val_dataset,
+            })
+        else:
+            dataset = load_dataset(
+                args.dataset_name,
+                args.dataset_config_name,
+                cache_dir=args.cache_dir
+                # use_auth_token=True,
+            )            
+    # load custom dataset
+    else:
+        data_files = {}
+        if args.train_data_dir is not None:
+            data_files["train"] = os.path.join(args.train_data_dir, "**")
+        dataset = load_dataset(
+            "imagefolder",
+            data_files=data_files,
+            cache_dir=args.cache_dir,
+        )
+        # See more about loading custom images at
+        # https://huggingface.co/docs/datasets/main/en/image_load#imagefolder
+    return dataset
+
     
 def main():
     args = parse_args()
@@ -676,7 +763,7 @@ def main():
         elif args.output_dir is not None:
             os.makedirs(args.output_dir, exist_ok=True)
 
-    print("first checkpoint")
+    print("Done: accelerator init, logging setup, and output directory creation")
     # Load scheduler, tokenizer and models.
     noise_scheduler = DDPMScheduler.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="scheduler"
@@ -700,8 +787,8 @@ def main():
         revision=args.non_ema_revision,
     )
 
-    vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
-    image_processor = VaeImageProcessor(vae_scale_factor=vae_scale_factor)
+    # vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
+    # image_processor = VaeImageProcessor(vae_scale_factor=vae_scale_factor)
     # text_proj = nn.Linear(768, 256)
     # added_linear = nn.Linear(1280, 768)
     added_linear = nn.Linear(1024, 768)
@@ -711,7 +798,7 @@ def main():
         print("UNABLE to load added linear weights")
         pass
 
-    print("second checkpoint")
+    print("Done: loaded noise_scheduler, tokenizer, text_encoder, VAE, UNet, and added_linear")
     # Freeze vae and text_encoder
     vae.requires_grad_(False)
     text_encoder.requires_grad_(False)
@@ -792,7 +879,7 @@ def main():
             * accelerator.num_processes
         )
 
-    print("third checkpoint")
+    print("Done: froze VAE/text_encoder, EMA setup, xformers, save/load hooks, gradient checkpointing, TF32, and LR scaling")
     # Initialize the optimizer
     if args.use_8bit_adam:
         try:
@@ -823,106 +910,12 @@ def main():
     print("use boxes: ", args.use_boxes)
     print("use text: ", args.use_text)
 
-    if args.dataset_name == 'all-local':
-        trsets = []
-        valsets = []
-        #osu - MWIR
-        valsets.append(ThermalDataset(data_root = '/mnt/store/jparanj1/Thermal_Datasets/OSU CT/val', return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks))
-        trsets.append(ThermalDataset(data_root = '/mnt/store/jparanj1/Thermal_Datasets/OSU CT/train', return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks))
-        #flir = LWIR    
-        # trsets.append(ThermalDataset(data_root = '/mnt/store/jparanj1/Thermal_Datasets/FLIR_Align/train', return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks))
-        # valsets.append(ThermalDataset(data_root = '/mnt/store/jparanj1/Thermal_Datasets/FLIR_Align/val', return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks))
-        #kaist - LWIR
-        trsets.append(ThermalDataset(data_root = '/mnt/store/jparanj1/Thermal_Datasets/KAIST/train', return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks))
-        valsets.append(ThermalDataset(data_root = '/mnt/store/jparanj1/Thermal_Datasets/KAIST/test', return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks))
-        #litiv - MWIR
-        trsets.append(ThermalDataset(data_root = '/mnt/store/jparanj1/Thermal_Datasets/litiv2012_dataset/train', return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks))
-        valsets.append(ThermalDataset(data_root = '/mnt/store/jparanj1/Thermal_Datasets/litiv2012_dataset/test', return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks))
-        #nirscene - NIR
-        trsets.append(ThermalDataset(data_root = '/mnt/store/jparanj1/Thermal_Datasets/NIRSCENE/train', return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks))
-        valsets.append(ThermalDataset(data_root = '/mnt/store/jparanj1/Thermal_Datasets/NIRSCENE/test', return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks))
-
-
-        tr_dataset = CustomConcatDataset(trsets)
-        val_dataset = CustomConcatDataset(valsets)
-        dataset = datasets.DatasetDict({
-                'train': tr_dataset,
-                'val': val_dataset,
-            })
-
-    elif args.dataset_name is not None:
-        # Downloading and loading a dataset from the hub.
-        if args.dataset_name=='osu-local':
-            tr_dataset = ThermalDataset(data_root = '/mnt/store/jparanj1/Thermal_Datasets/OSU CT/train', return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks)
-            val_dataset = ThermalDataset(data_root = '/mnt/store/jparanj1/Thermal_Datasets/OSU CT/val', return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks)
-            dataset = datasets.DatasetDict({
-                'train': tr_dataset,
-                'val': val_dataset,
-            })
-        elif args.dataset_name=='m3fd-local':
-            tr_dataset = ThermalDataset(data_root = f'/mnt/store/jparanj1/Thermal_Datasets/M3FD_Fusion/splits/split_{args.split}/train', return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks)
-            val_dataset = ThermalDataset(data_root = f'/mnt/store/jparanj1/Thermal_Datasets/M3FD_Fusion/splits/split_{args.split}/val', return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks)
-            dataset = datasets.DatasetDict({
-                'train': tr_dataset,
-                'val': val_dataset,
-            })
-        elif args.dataset_name=='flir_v1-local':
-            tr_dataset = ThermalDataset(data_root = '/mnt/store/jparanj1/Thermal_Datasets/FLIR_Align/train', return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks)
-            val_dataset = ThermalDataset(data_root = '/mnt/store/jparanj1/Thermal_Datasets/FLIR_Align/val', return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks)
-            dataset = datasets.DatasetDict({
-                'train': tr_dataset,
-                'val': val_dataset
-            })
-        elif args.dataset_name=='kaist-local':
-            tr_dataset = ThermalDataset(data_root = '/mnt/store/jparanj1/Thermal_Datasets/KAIST/train', return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks)
-            val_dataset = ThermalDataset(data_root = '/mnt/store/jparanj1/Thermal_Datasets/KAIST/test', return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks)
-            dataset = datasets.DatasetDict({
-                'train': tr_dataset,
-                'val': val_dataset
-            })
-        elif args.dataset_name=='llvip-local':
-            tr_dataset = ThermalDataset(data_root = '/mnt/store/jparanj1/Thermal_Datasets/LLVIP/train', return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks)
-            val_dataset = ThermalDataset(data_root = '/mnt/store/jparanj1/Thermal_Datasets/LLVIP/test', return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks)
-            dataset = datasets.DatasetDict({
-                'train': tr_dataset,
-                'val': val_dataset
-            })
-        elif args.dataset_name=='litiv-local':
-            tr_dataset = ThermalDataset(data_root = '/mnt/store/jparanj1/Thermal_Datasets/litiv2012_dataset/train', return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks)
-            val_dataset = ThermalDataset(data_root = '/mnt/store/jparanj1/Thermal_Datasets/litiv2012_dataset/test', return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks)
-            dataset = datasets.DatasetDict({
-                'train': tr_dataset,
-                'val': val_dataset
-            })
-        elif args.dataset_name=='nirscene-local':
-            tr_dataset = ThermalDataset(data_root = '/mnt/store/jparanj1/Thermal_Datasets/NIRSCENE/train', return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks)
-            val_dataset = ThermalDataset(data_root = '/mnt/store/jparanj1/Thermal_Datasets/NIRSCENE/test', return_boxes=args.use_boxes, return_text=args.use_text, return_masks=args.use_masks)
-            dataset = datasets.DatasetDict({
-                'train': tr_dataset,
-                'val': val_dataset
-            })
-        else:
-            dataset = load_dataset(
-                args.dataset_name,
-                args.dataset_config_name,
-                cache_dir=args.cache_dir
-                # use_auth_token=True,
-            )
-    else:
-        data_files = {}
-        if args.train_data_dir is not None:
-            data_files["train"] = os.path.join(args.train_data_dir, "**")
-        dataset = load_dataset(
-            "imagefolder",
-            data_files=data_files,
-            cache_dir=args.cache_dir,
-        )
-        # See more about loading custom images at
-        # https://huggingface.co/docs/datasets/main/en/image_load#imagefolder
-
+    dataset = get_dataset(args)
+    
+    print("Done: optimizer creation and dataset loading")
+    
     # Preprocessing the datasets.
     # We need to tokenize inputs and targets.
-    print("fourth checkpoint")
     column_names = dataset["train"].column_names
     print("column_names: ", column_names)
 
@@ -1068,7 +1061,7 @@ def main():
         if len(input_ids.shape)>4:
             input_ids = input_ids.squeeze(0)
 
-        if examples[0]['text_embed']==None:
+        if examples[0]['text_embed'] is None:
             text_embed = None
         else:
             text_embed = torch.stack(
@@ -1081,7 +1074,7 @@ def main():
             if len(text_embed.shape)>4:
                 text_embed = text_embed.squeeze(0)
             
-        if examples[0]['box_embed'] == None:
+        if examples[0]['box_embed'] is None:
             box_embed = None
         else:
             box_embed = torch.stack(
@@ -1094,7 +1087,7 @@ def main():
             if len(box_embed.shape)>4:
                 box_embed = box_embed.squeeze(0)
 
-        if examples[0]['mask_embed']==None:
+        if examples[0]['mask_embed'] is None:
             mask_embed = None
         else:
             mask_embed = torch.stack(
@@ -1118,7 +1111,9 @@ def main():
             'mask_embed': mask_embed,
             'masks': masks
         }
-    print("fifth checkpoint: ")
+    
+    print("Done: column names resolution, preprocessing/tokenization transforms, train dataset wrapping, and collate_fn definition")
+
     # DataLoaders creation:
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
@@ -1196,6 +1191,7 @@ def main():
     )
     logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
     logger.info(f"  Total optimization steps = {args.max_train_steps}")
+    
     global_step = 0
     first_epoch = 0
 
