@@ -1,42 +1,38 @@
 import os
+import random
+import sys
+
+import cv2
 import numpy as np
 import PIL
-from PIL import Image
-from torch.utils.data import Dataset
-from torchvision import transforms
-import random
-import cv2
-from matplotlib import pyplot as plt
-import torchvision.transforms.functional as tf
-from copy import deepcopy
 import torch
 import torchvision
-import sys
+import torchvision.transforms as TS
+from matplotlib import pyplot as plt
+from PIL import Image
+from torch.utils.data import Dataset
+
 sys.path.append('Grounded-Segment-Anything')
 sys.path.append("Grounded-Segment-Anything/GroundingDINO")
 sys.path.append("Grounded-Segment-Anything/recognize-anything")
+sys.path.append("Grounded-Segment-Anything/segment_anything")
 
-from transformers import CLIPTextModel, CLIPTokenizer
-from positional_encodings.torch_encodings import PositionalEncodingPermute2D, Summer
-
-#gsam requirements
-# Grounding DINO
 from GroundingDINO.groundingdino.datasets import transforms as T
 from GroundingDINO.groundingdino.models import build_model
 from GroundingDINO.groundingdino.util.slconfig import SLConfig
-from GroundingDINO.groundingdino.util.utils import clean_state_dict, get_phrases_from_posmap
-
-# segment anything
-from segment_anything import (
-    build_sam,
-    build_sam_vit_b,
-    build_sam_hq,
-    SamPredictor
-) 
-# Recognize Anything Model & Tag2Text
-from ram.models import ram
+from GroundingDINO.groundingdino.util.utils import (
+    clean_state_dict,
+    get_phrases_from_posmap,
+)
+from positional_encodings.torch_encodings import PositionalEncodingPermute2D
 from ram import inference_ram
-import torchvision.transforms as TS
+from ram.models import ram
+from segment_anything import SamPredictor, build_sam, build_sam_hq, build_sam_vit_b
+from transformers import CLIPTextModel, CLIPTokenizer
+
+
+WEIGHTS_DIR = os.environ.get('MODEL_WEIGHTS', "pretrained_weights")
+
 
 def tokenize_captions(tokenizer, captions):
         inputs = tokenizer(
@@ -139,9 +135,9 @@ class TransformDataset(Dataset):
 class ThermalDataset(Dataset):
     def __init__(self, data_root, 
                  config_file='Grounded-Segment-Anything/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py', 
-                 grounded_checkpoint='Grounded-Segment-Anything/groundingdino_swint_ogc.pth', 
-                 ram_checkpoint='Grounded-Segment-Anything/ram_swin_large_14m.pth',
-                 sam_checkpoint='Grounded-Segment-Anything/sam_vit_b_01ec64.pth',
+                 grounded_checkpoint=os.path.join(WEIGHTS_DIR, 'groundingdino_swint_ogc.pth'), 
+                 ram_checkpoint=os.path.join(WEIGHTS_DIR, 'ram_swin_large_14m.pth'),
+                 sam_checkpoint=os.path.join(WEIGHTS_DIR, 'sam_vit_b_01ec64.pth'),
                  return_boxes=False,
                  return_masks=True,
                  return_text=True,
@@ -189,6 +185,7 @@ class ThermalDataset(Dataset):
             'openai/clip-vit-large-patch14',
             # subfolder="text_encoder",
         ).to(self.device)
+
     def __len__(self):
         return len(self.natural_im_list)
     
@@ -214,7 +211,7 @@ class ThermalDataset(Dataset):
             text_ins = text_ins+'. '
         text_ins = text_ins + f'Make it {wave} wave Infrared.'
 
-        #get GSAM outputs
+        # get GSAM outputs
         # print(f"return text: {self.return_text}, return boxes: {self.return_boxes}, return masks: {self.return_masks}")
         with torch.no_grad():
             image_path = os.path.join(self.data_root, 'Vis', self.natural_im_list[i])
@@ -325,7 +322,7 @@ class ThermalDataset(Dataset):
                 mask_embeddings = None
                     
 
-            # # draw output image
+            # draw output image
             # plt.figure(figsize=(10, 10))
             # plt.imshow(image)
             # for mask in masks:
@@ -333,7 +330,7 @@ class ThermalDataset(Dataset):
             # for box, label in zip(boxes_filt, pred_phrases):
             #     show_box(box.numpy(), plt.gca(), label)
 
-            # # plt.title('RAM-tags' + tags + '\n' + 'RAM-tags_chineseing: ' + tags_chinese + '\n')
+            # plt.title('RAM-tags' + tags + '\n' + 'RAM-tags_chineseing: ' + tags_chinese + '\n')
             # plt.axis('off')
             # plt.savefig(
             #     "automatic_label_output.jpg", 
@@ -353,10 +350,13 @@ class ThermalDataset(Dataset):
 
 
 if __name__ == "__main__":
-    # data_path = '/mnt/store/jparanj1/Thermal_Datasets/M3FD_Fusion/splits/split_1/train'
-    data_path = '/mnt/store/jparanj1/Thermal_Datasets/OSU CT/train'
-    d = ThermalDataset(data_path, return_boxes=True,
-                 return_masks=True,
-                 return_text=True,)
+    data_root = os.getenv("DATASETS", "datasets")
+    data_path = os.path.join(data_root, 'kaist', 'train')
+    d = ThermalDataset(
+        data_path, 
+        return_boxes=True,
+        return_masks=True,
+        return_text=True,
+    )
     d0 = d[0]
     print("Length of dataset: ", len(d))
