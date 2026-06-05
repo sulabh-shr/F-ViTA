@@ -17,6 +17,7 @@
 """Script to fine-tune InstructPix2Pix."""
 
 import argparse
+import functools
 import logging
 import math
 import os
@@ -91,6 +92,16 @@ DATASET_NAME_MAPPING = {
     ),
 }
 WANDB_TABLE_COL_NAMES = ["original_image", "edited_image", "edit_prompt"]
+
+
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', '1'):
+        return True
+    if v.lower() in ('no', 'false', '0'):
+        return False
+    raise argparse.ArgumentTypeError(f'Boolean value expected, got {v!r}')
 
 
 def parse_args():
@@ -436,28 +447,39 @@ def parse_args():
     )
     parser.add_argument(
         "--use_ibl",
+        type=str2bool,
         default=False,
         help="Whether to use Instance Brightness Loss",
     )
     parser.add_argument(
         "--use_extra_mse",
+        type=str2bool,
         default=False,
         help='Whether to use Extra MSE loss'
     )
     parser.add_argument(
         "--use_boxes",
+        type=str2bool,
         default=False,
         help='whether to use boxes from Grounded SAM'
     )
     parser.add_argument(
         "--use_masks",
+        type=str2bool,
         default=True,
         help='whether to use masks from Grounded SAM'
     )
     parser.add_argument(
         "--use_text",
+        type=str2bool,
         default=True,
         help='whether to use text tags from Grounded SAM'
+    )
+    parser.add_argument(
+        "--mask_padded_inputs",
+        default=False,
+        action='store_true',
+        help='whether to return an attention mask for padded foundation model tokens'
     )
 
     args = parser.parse_args()
@@ -498,8 +520,6 @@ def download_image(url):
     image = PIL.ImageOps.exif_transpose(image)
     image = image.convert("RGB")
     return image
-
-import torch
 
 
 def rgb_to_hsv(rgb: torch.Tensor) -> torch.Tensor:
@@ -1037,7 +1057,7 @@ def main():
 
     # train_dataset = dataset["train"].with_transform(preprocess_train)
 
-    def collate_fn(examples):
+    def collate_fn(examples, mask_padded_inputs=False):
         original_pixel_values = torch.stack(
             [example["original_pixel_values"] for example in examples]
         )
@@ -1045,7 +1065,7 @@ def main():
             memory_format=torch.contiguous_format
         ).float()
         if len(original_pixel_values.shape)>4:
-            original_pixel_values = original_pixel_values.squeeze(0)
+            original_pixel_values = original_pixel_values.squeeze(1)
             
         edited_pixel_values = torch.stack(
             [example["edited_pixel_values"] for example in examples]
@@ -1054,53 +1074,91 @@ def main():
             memory_format=torch.contiguous_format
         ).float()
         if len(edited_pixel_values.shape)>4:
-            edited_pixel_values = edited_pixel_values.squeeze(0)
+            edited_pixel_values = edited_pixel_values.squeeze(1)
 
         input_ids = torch.stack([example["input_ids"] for example in examples])
         # print("input ids shape: ", input_ids.shape)
         if len(input_ids.shape)>4:
-            input_ids = input_ids.squeeze(0)
+            input_ids = input_ids.squeeze(1)
 
         if examples[0]['text_embed'] is None:
             text_embed = None
         else:
-            text_embed = torch.stack(
-                [example["text_embed"] for example in examples]
-            )
+            embeds = [example["text_embed"] for example in examples]
+            max_n = max(e.shape[0] for e in embeds)
+            padded = []
+            for e in embeds:
+                pad_size = max_n - e.shape[0]
+                if pad_size > 0:
+                    padding = torch.zeros(pad_size, *e.shape[1:], dtype=e.dtype, device=e.device)
+                    e = torch.cat([e, padding], dim=0)
+                padded.append(e)
+            text_embed = torch.stack(padded)
             text_embed = text_embed.to(
                 memory_format=torch.contiguous_format
             ).float()
-            # print("text embed shape: ", text_embed.shape)
             if len(text_embed.shape)>4:
-                text_embed = text_embed.squeeze(0)
+                text_embed = text_embed.squeeze(1)
             
         if examples[0]['box_embed'] is None:
             box_embed = None
         else:
-            box_embed = torch.stack(
-                [example["box_embed"] for example in examples]
-            )
+            embeds = [example["box_embed"] for example in examples]
+            max_n = max(e.shape[0] for e in embeds)
+            padded = []
+            for e in embeds:
+                pad_size = max_n - e.shape[0]
+                if pad_size > 0:
+                    padding = torch.zeros(pad_size, *e.shape[1:], dtype=e.dtype, device=e.device)
+                    e = torch.cat([e, padding], dim=0)
+                padded.append(e)
+            box_embed = torch.stack(padded)
             box_embed = box_embed.to(
                 memory_format=torch.contiguous_format
             ).float()
-            # print("box embed: ", box_embed.shape)
             if len(box_embed.shape)>4:
-                box_embed = box_embed.squeeze(0)
+                box_embed = box_embed.squeeze(1)
 
         if examples[0]['mask_embed'] is None:
             mask_embed = None
         else:
-            mask_embed = torch.stack(
-                [example["mask_embed"] for example in examples]
-            )
+            embeds = [example["mask_embed"] for example in examples]
+            max_n = max(e.shape[0] for e in embeds)
+            padded = []
+            for e in embeds:
+                pad_size = max_n - e.shape[0]
+                if pad_size > 0:
+                    padding = torch.zeros(pad_size, *e.shape[1:], dtype=e.dtype, device=e.device)
+                    e = torch.cat([e, padding], dim=0)
+                padded.append(e)
+            mask_embed = torch.stack(padded)
             mask_embed = mask_embed.to(
                 memory_format=torch.contiguous_format
             ).float()
-            # print("mask embed shape: ", mask_embed.shape)
             if len(mask_embed.shape)>4:
-                mask_embed = mask_embed.squeeze(0)
+                mask_embed = mask_embed.squeeze(1)
 
-        masks = torch.stack([example['masks'] for example in examples])
+        mask_list = [example['masks'] for example in examples]
+        max_n = max(m.shape[0] for m in mask_list)
+        real_counts = [m.shape[0] for m in mask_list]
+        padded = []
+        for m in mask_list:
+            pad_size = max_n - m.shape[0]
+            if pad_size > 0:
+                padding = torch.zeros(pad_size, *m.shape[1:], dtype=m.dtype, device=m.device)
+                m = torch.cat([m, padding], dim=0)
+            padded.append(m)
+        masks = torch.stack(padded)
+
+        fm_attn_mask = None
+        if mask_padded_inputs:
+            fm_embed = mask_embed if mask_embed is not None else box_embed
+            if fm_embed is not None:
+                sd = fm_embed.shape[2]
+                batch_size = len(examples)
+                fm_attn_mask = torch.zeros(batch_size, max_n * sd)
+                for i, n_real in enumerate(real_counts):
+                    fm_attn_mask[i, :n_real * sd] = 1.0
 
         return {
             "original_pixel_values": original_pixel_values,
@@ -1109,7 +1167,8 @@ def main():
             "text_embed": text_embed,
             'box_embed': box_embed,
             'mask_embed': mask_embed,
-            'masks': masks
+            'masks': masks,
+            'fm_attn_mask': fm_attn_mask,
         }
     
     print("Done: column names resolution, preprocessing/tokenization transforms, train dataset wrapping, and collate_fn definition")
@@ -1118,7 +1177,7 @@ def main():
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
         shuffle=True,
-        collate_fn=collate_fn,
+        collate_fn=functools.partial(collate_fn, mask_padded_inputs=args.mask_padded_inputs),
         batch_size=args.train_batch_size,
         num_workers=args.dataloader_num_workers,
     )
@@ -1342,6 +1401,13 @@ def main():
                 fm_states = added_linear(fm_states.to(torch.float32))
                 encoder_hidden_states = torch.cat([encoder_hidden_states, fm_states], dim=1)
                 # print("encoder_hidden states after concatenation shape: ", encoder_hidden_states.shape)
+
+                encoder_attention_mask = None
+                if batch['fm_attn_mask'] is not None:
+                    text_seq_len = encoder_hidden_states.shape[1] - fm_states.shape[1]
+                    text_ones = torch.ones(b, text_seq_len, dtype=encoder_hidden_states.dtype, device=encoder_hidden_states.device)
+                    encoder_attention_mask = torch.cat([text_ones, batch['fm_attn_mask'].to(encoder_hidden_states.device)], dim=1)
+
                 # Concatenate the `original_image_embeds` with the `noisy_latents`.
                 concatenated_noisy_latents = torch.cat(
                     [noisy_latents, original_image_embeds], dim=1
@@ -1359,7 +1425,8 @@ def main():
 
                 # Predict the noise residual and compute loss
                 model_pred = unet(
-                    concatenated_noisy_latents, timesteps, encoder_hidden_states
+                    concatenated_noisy_latents, timesteps, encoder_hidden_states,
+                    encoder_attention_mask=encoder_attention_mask,
                 ).sample
                 loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
                 # print("noise mse loss: ", loss)
@@ -1550,6 +1617,7 @@ def main():
             )
 
     accelerator.end_training()
+    print("Training completed")
 
 
 if __name__ == "__main__":

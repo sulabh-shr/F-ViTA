@@ -30,7 +30,6 @@ from ram.models import ram
 from segment_anything import SamPredictor, build_sam, build_sam_hq, build_sam_vit_b
 from transformers import CLIPTextModel, CLIPTokenizer
 
-
 WEIGHTS_DIR = os.environ.get('MODEL_WEIGHTS', "pretrained_weights")
 
 
@@ -171,9 +170,9 @@ class ThermalDataset(Dataset):
         self.box_threshold = 0.25
         self.text_threshold = 0.2
         self.iou_threshold = 0.5
-        self.return_text = True if return_text.lower()=='true' else False
-        self.return_boxes = True if return_boxes.lower()=='true' else False
-        self.return_masks = True if return_masks.lower()=='true' else False
+        self.return_text = return_text
+        self.return_boxes = return_boxes
+        self.return_masks = return_masks
         self.predictor = SamPredictor(build_sam_vit_b(checkpoint=sam_checkpoint).to(device))
 
     
